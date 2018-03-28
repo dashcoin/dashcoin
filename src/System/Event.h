@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2014, The CryptoNote developers, The Bytecoin developers
+// Copyright (c) 2012-2015, The CryptoNote developers, The Bytecoin developers
 //
 // This file is part of Bytecoin.
 //
@@ -17,12 +17,14 @@
 
 #pragma once
 
-class System;
+namespace System {
+
+class Dispatcher;
 
 class Event {
 public:
   Event();
-  explicit Event(System& system);
+  explicit Event(Dispatcher& dispatcher);
   Event(const Event&) = delete;
   Event(Event&& other);
   ~Event();
@@ -34,10 +36,10 @@ public:
   void wait();
 
 private:
-  struct Waiter;
-
-  System* system;
-  Waiter* first;
-  Waiter* last;
+  Dispatcher* dispatcher;
   bool state;
+  void* first;
+  void* last;
 };
+
+}

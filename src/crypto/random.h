@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2014, The CryptoNote developers, The Bytecoin developers
+// Copyright (c) 2012-2015, The CryptoNote developers, The Bytecoin developers
 //
 // This file is part of Bytecoin.
 //
@@ -17,6 +17,8 @@
 
 #pragma once
 
+#if !defined(__cplusplus)
 #include <stddef.h>
+#endif
 
 void generate_random_bytes(size_t n, void *result);

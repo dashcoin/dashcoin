@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2014, The CryptoNote developers, The Bytecoin developers
+// Copyright (c) 2012-2015, The CryptoNote developers, The Bytecoin developers
 //
 // This file is part of Bytecoin.
 //
@@ -17,82 +17,130 @@
 
 #include "Event.h"
 #include <cassert>
-#include "System.h"
+#include <System/Dispatcher.h>
+#include <System/InterruptedException.h>
 
-struct Event::Waiter {
-  Event::Waiter* next;
-  void* context;
+namespace System {
+
+namespace {
+
+struct EventWaiter {
+  bool interrupted;
+  EventWaiter* prev;
+  EventWaiter* next;
+  NativeContext* context;
 };
 
-Event::Event() : system(nullptr) {
 }
 
-Event::Event(System& system) : system(&system), first(nullptr), state(false) {
+Event::Event() : dispatcher(nullptr) {
 }
 
-Event::Event(Event&& other) : system(other.system) {
-  if (other.system != nullptr) {
-    first = other.first;
-    if (other.first != nullptr) {
-      last = other.last;
+Event::Event(Dispatcher& dispatcher) : dispatcher(&dispatcher), state(false), first(nullptr) {
+}
+
+Event::Event(Event&& other) : dispatcher(other.dispatcher) {
+  if (dispatcher != nullptr) {
+    state = other.state;
+    if (!state) {
+      assert(other.first == nullptr);
+      first = nullptr;
     }
 
-    state = other.state;
-    other.system = nullptr;
+    other.dispatcher = nullptr;
   }
 }
 
 Event::~Event() {
-  assert(first == nullptr);
+  assert(dispatcher == nullptr || state || first == nullptr);
 }
 
 Event& Event::operator=(Event&& other) {
-  assert(first == nullptr);
-  system = other.system;
-  if (other.system != nullptr) {
-    first = other.first;
-    if (other.first != nullptr) {
-      last = other.last;
+  assert(dispatcher == nullptr || state || first == nullptr);
+  dispatcher = other.dispatcher;
+  if (dispatcher != nullptr) {
+    state = other.state;
+    if (!state) {
+      assert(other.first == nullptr);
+      first = nullptr;
     }
 
-    state = other.state;
-    other.system = nullptr;
+    other.dispatcher = nullptr;
   }
 
   return *this;
 }
 
 bool Event::get() const {
-  assert(system != nullptr);
+  assert(dispatcher != nullptr);
   return state;
 }
 
 void Event::clear() {
-  assert(system != nullptr);
-  state = false;
+  assert(dispatcher != nullptr);
+  if (state) {
+    state = false;
+    first = nullptr;
+  }
 }
 
 void Event::set() {
-  assert(system != nullptr);
-  state = true;
-  for (Waiter* waiter = first; waiter != nullptr; waiter = waiter->next) {
-    system->pushContext(waiter->context);
+  assert(dispatcher != nullptr);
+  if (!state) {
+    state = true;
+    for (EventWaiter* waiter = static_cast<EventWaiter*>(first); waiter != nullptr; waiter = waiter->next) {
+      waiter->context->interruptProcedure = nullptr;
+      dispatcher->pushContext(waiter->context);
+    }
   }
-
-  first = nullptr;
 }
 
 void Event::wait() {
-  assert(system != nullptr);
-  Waiter waiter = {nullptr, system->getCurrentContext()};
-  if (first != nullptr) {
-    last->next = &waiter;
-  } else {
-    first = &waiter;
+  assert(dispatcher != nullptr);
+  if (dispatcher->interrupted()) {
+    throw InterruptedException();
   }
 
-  last = &waiter;
-  while (!state) {
-    system->yield();
+  if (!state) {
+    EventWaiter waiter = { false, nullptr, nullptr, dispatcher->getCurrentContext() };
+    waiter.context->interruptProcedure = [&] {
+      if (waiter.next != nullptr) {
+        assert(waiter.next->prev == &waiter);
+        waiter.next->prev = waiter.prev;
+      } else {
+        assert(last == &waiter);
+        last = waiter.prev;
+      }
+
+      if (waiter.prev != nullptr) { 
+        assert(waiter.prev->next == &waiter);
+        waiter.prev->next = waiter.next;
+      } else {
+        assert(first == &waiter);
+        first = waiter.next;
+      }
+
+      assert(!waiter.interrupted);
+      waiter.interrupted = true;
+      dispatcher->pushContext(waiter.context);
+    };
+
+    if (first != nullptr) {
+      static_cast<EventWaiter*>(last)->next = &waiter;
+      waiter.prev = static_cast<EventWaiter*>(last);
+    } else {
+      first = &waiter;
+    }
+
+    last = &waiter;
+    dispatcher->dispatch();
+    assert(waiter.context == dispatcher->getCurrentContext());
+    assert( waiter.context->interruptProcedure == nullptr);
+    assert(dispatcher != nullptr);
+    if (waiter.interrupted) {
+      throw InterruptedException();
+    } 
   }
+}
+
 }
